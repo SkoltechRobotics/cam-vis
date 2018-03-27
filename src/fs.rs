@@ -1,3 +1,6 @@
+#![cfg_attr(feature = "cargo-clippy", allow(empty_line_after_outer_attr))]
+#![cfg_attr(feature = "cargo-clippy", allow(expl_impl_clone_on_copy))]
+
 #[derive(VulkanoShader)]
 #[ty = "fragment"]
 #[src = "

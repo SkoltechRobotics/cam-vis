@@ -1,6 +1,9 @@
-    #[derive(VulkanoShader)]
-    #[ty = "vertex"]
-    #[src = "
+#![cfg_attr(feature = "cargo-clippy", allow(empty_line_after_outer_attr))]
+#![cfg_attr(feature = "cargo-clippy", allow(expl_impl_clone_on_copy))]
+
+#[derive(VulkanoShader)]
+#[ty = "vertex"]
+#[src = "
 
 #version 450
 
@@ -10,19 +13,18 @@
 layout(location = 0) in vec2 position;
 
 layout(push_constant) uniform pushConstants {
-    vec2 aspect;
-    vec2 offset;
-    float zoom;
+vec2 aspect;
+vec2 offset;
+float zoom;
 } push_const;
 
 //layout(location = 0) out vec3 pos;
 
 void main() {
-    vec2 off = 2*(push_const.offset - vec2(0.5, 0.5));
-    vec2 pos = (position - off)*push_const.aspect*push_const.zoom;
-    gl_Position = vec4(pos, 0.0, 1.0);
+vec2 off = 2*(push_const.offset - vec2(0.5, 0.5));
+vec2 pos = (position - off)*push_const.aspect*push_const.zoom;
+gl_Position = vec4(pos, 0.0, 1.0);
 }
-
 "]
-    #[allow(dead_code)]
-    struct Dummy;
+#[allow(dead_code)]
+struct Dummy;

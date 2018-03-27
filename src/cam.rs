@@ -26,14 +26,14 @@ pub struct FrameBuf {
 impl Cam {
     pub fn new(dev: &str) -> Result<Self, Box<error::Error>> {
         let mut camera = Camera::new(dev)
-            .map_err(|e| Box::new(e))?;
+            .map_err(Box::new)?;
 
         let format_info = camera.formats().find(|v| {
-            match v {
-                &Ok(FormatInfo{ ref format, .. }) => {
+            match *v {
+                Ok(FormatInfo{ ref format, .. }) => {
                     format == b"YUYV" || format == b"RGGB" || format == b"GREY"
                 }
-                &Err(ref e) => panic!("{:?}", e),
+                Err(ref e) => panic!("{:?}", e),
             }
         }).expect("camera does not have supported formats")?;
 
@@ -47,8 +47,7 @@ impl Cam {
 
         let frame_size = match &format {
             b"YUYV" => 2*resolution.0*resolution.1,
-            b"GREY" => resolution.0*resolution.1,
-            b"RGGB" => resolution.0*resolution.1,
+            b"GREY" | b"RGGB" => resolution.0*resolution.1,
             _ => unreachable!(),
         } as usize;
 
@@ -61,11 +60,11 @@ impl Cam {
         let interval = (1, 30);
 
         camera.start(&Config {
-            interval: interval,
-            resolution: resolution,
+            interval,
+            resolution,
             format: &format,
             ..Default::default()
-        }).map_err(|e| Box::new(e))?;
+        }).map_err(Box::new)?;
 
         let pixels = (resolution.0*resolution.1) as usize;
         Ok(Cam {camera, resolution, interval, format, frame_size, pixels})
@@ -134,5 +133,5 @@ impl Cam {
 fn is_drop(t: u64, prev: u64, interval: (u32, u32)) -> bool {
     let dt = t - prev;
     //println!("{:?} {}", dt, (interval.0 as u64)*1_000_000/(interval.1 as u64));
-    dt > (interval.0 as u64)*1_100_000/(interval.1 as u64)
+    dt > u64::from(interval.0)*1_100_000/u64::from(interval.1)
 }

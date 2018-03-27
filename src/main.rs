@@ -402,7 +402,7 @@ fn main() {
             match ev {
                 winit::Event::WindowEvent {
                     event: winit::WindowEvent::Closed, ..
-                } => done = true,
+                } |
                 winit::Event::WindowEvent {
                     event: winit::WindowEvent::KeyboardInput {
                         input: winit::KeyboardInput {
@@ -411,7 +411,8 @@ fn main() {
                             ..
                         }, ..
                     }, ..
-                } => done = true,
+                }
+                => done = true,
                 winit::Event::WindowEvent {
                     event: winit::WindowEvent::KeyboardInput {
                         input: winit::KeyboardInput {
