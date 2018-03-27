@@ -1,7 +1,11 @@
 [package]
 name = "cam-vis"
 version = "0.1.0"
-authors = ["newpavlov"]
+authors = ["Artyom Pavlov<newpavlov@gmail.com>"]
+license = "MIT/Apache-2.0"
+description = "Simple camera visualization tool"
+documentation = "https://docs.rs/cam-vis"
+repository = "https://github.com/SkoltechRobotics/cam-vis"
 
 [dependencies]
 vulkano = "0.9"
