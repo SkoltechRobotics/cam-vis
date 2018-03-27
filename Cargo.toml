@@ -1,0 +1,12 @@
+[package]
+name = "cam-vis"
+version = "0.1.0"
+authors = ["newpavlov"]
+
+[dependencies]
+vulkano = "0.9"
+vulkano-win = "0.9"
+vulkano-shader-derive = "0.9"
+winit = "0.11"
+rscam = "^0.5.4"
+bayer = "0.1"
