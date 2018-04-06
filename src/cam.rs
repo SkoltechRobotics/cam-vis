@@ -1,6 +1,6 @@
 use std::{thread, error, str};
 
-use rscam::{Camera, Config, FormatInfo, ResolutionInfo};
+use rscam::{Camera, Config, ResolutionInfo, IntervalInfo};
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use demosaic::demosaic;
 
 const BP: [u8; 3] = [0, 0, 255];
+const MAX_FPS: u32 = 60;
 
 pub struct Cam {
     camera: Camera,
@@ -28,36 +29,54 @@ impl Cam {
         let mut camera = Camera::new(dev)
             .map_err(Box::new)?;
 
-        let format_info = camera.formats().find(|v| {
-            match *v {
-                Ok(FormatInfo{ ref format, .. }) => {
-                    format == b"YUYV" || format == b"RGGB" || format == b"GREY"
-                }
-                Err(ref e) => panic!("{:?}", e),
+        let mut format = Err("camera formats are not supported".to_string());
+        let mut format_priority = 0u8;
+        eprint!("Camera formats:");
+        for f in camera.formats() {
+            let f = f?;
+            eprint!(" {}{}{}{}",
+                f.format[0] as char, f.format[1] as char,
+                f.format[2] as char, f.format[3] as char,
+            );
+            let priority = match &f.format {
+                b"YUYV" => 1,
+                b"GREY" => 2,
+                b"RGGB" => 3,
+                b"BGR3" => 4,
+                b"RGB3" => 5,
+                _ => continue,
+            };
+            if format_priority < priority {
+                format = Ok(f.format);
+                format_priority = priority;
             }
-        }).expect("camera does not have supported formats")?;
-
-        let format = format_info.format;
+        }
+        eprintln!();
+        let format = format?;
+        eprintln!("Selected format: {}{}{}{}",
+            format[0] as char, format[1] as char,
+            format[2] as char, format[3] as char,
+        );
 
         let resolution = match camera.resolutions(&format)? {
             ResolutionInfo::Discretes(v) => *v.iter().max().unwrap(),
             ResolutionInfo::Stepwise{max, ..} => max,
         };
-        //let resolution = (640, 480);
+        eprintln!("Selected resolution: {:?}", resolution);
 
         let frame_size = match &format {
             b"YUYV" => 2*resolution.0*resolution.1,
             b"GREY" | b"RGGB" => resolution.0*resolution.1,
+            b"BGR3" | b"RGB3" => 3*resolution.0*resolution.1,
             _ => unreachable!(),
         } as usize;
 
-        /*
         let interval = match camera.intervals(&format, resolution)? {
-            IntervalInfo::Discretes(v) => *v.iter().filter(|v| v.1 <= 60).max().unwrap(),
+            IntervalInfo::Discretes(v) =>
+                *v.iter().filter(|v| v.0 == 1 && v.1 <= MAX_FPS).max().unwrap(),
             IntervalInfo::Stepwise{max, ..} => max,
         };
-        */
-        let interval = (1, 30);
+        eprintln!("Selected interval: {:?}", interval);
 
         camera.start(&Config {
             interval,
@@ -113,9 +132,10 @@ impl Cam {
         self.resolution
     }
 
-    pub fn get_interval(&self) -> (u32, u32) {
+    /*pub fn get_interval(&self) -> (u32, u32) {
         self.interval
     }
+    */
 
     pub fn get_format(&self) -> [u8; 4] {
         self.format

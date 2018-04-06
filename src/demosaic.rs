@@ -61,6 +61,8 @@ fn demosaic_grey(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     assert_eq!(frame.len(), buf.len());
 
     buf.iter_mut().zip(frame).for_each(|(a, b)|
+        *a = [*b, *b, *b]
+        /*
         *a = if *b > 250 {
             [255, 0, 0]
         } else if *b > 200 {
@@ -70,7 +72,28 @@ fn demosaic_grey(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
         } else {
             [0, 0, 0]
         }
+        */
     );
+}
+
+fn demosaic_bgr3(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
+    assert_eq!(buf.len(), cam.get_pixels());
+    assert_eq!(frame.len(), cam.get_frame_size());
+    assert_eq!(frame.len(), 3*buf.len());
+
+    for (i, pix) in buf.iter_mut().enumerate() {
+        *pix = [frame[3*i+2], frame[3*i+1], frame[3*i]];
+    }
+}
+
+fn demosaic_rgb3(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
+    assert_eq!(buf.len(), cam.get_pixels());
+    assert_eq!(frame.len(), cam.get_frame_size());
+    assert_eq!(frame.len(), 3*buf.len());
+
+    for (i, pix) in buf.iter_mut().enumerate() {
+        *pix = [frame[3*i], frame[3*i+1], frame[3*i+2]];
+    }
 }
 
 pub fn demosaic(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
@@ -78,6 +101,8 @@ pub fn demosaic(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
         b"YUYV" => demosaic_yuyv(cam, buf, frame),
         b"RGGB" => demosaic_rggb(cam, buf, frame),
         b"GREY" => demosaic_grey(cam, buf, frame),
+        b"BGR3" => demosaic_bgr3(cam, buf, frame),
+        b"RGB3" => demosaic_rgb3(cam, buf, frame),
         _ => unreachable!(),
     };
 }

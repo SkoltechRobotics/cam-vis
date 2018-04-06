@@ -13,8 +13,7 @@ use vulkano::sync::GpuFuture;
 use vulkano::framebuffer::Subpass;
 use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::framebuffer::Framebuffer;
-use vulkano::buffer::CpuAccessibleBuffer;
-use vulkano::buffer::BufferUsage;
+use vulkano::buffer::{CpuAccessibleBuffer, CpuBufferPool};
 use vulkano::image::Dimensions;
 use vulkano::image::StorageImage;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
@@ -23,6 +22,7 @@ use vulkano::swapchain::Swapchain;
 use vulkano::swapchain::SwapchainCreationError;
 use vulkano::pipeline::viewport::Viewport;
 use vulkano::device::Device;
+use vulkano::command_buffer::DynamicState;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,21 +51,24 @@ struct PushConstant {
     zoom: f32,
 }
 
+#[inline]
+fn rgb2rgba(v: &[u8; 3]) -> [u8; 4] {
+    [v[0], v[1], v[2], 255]
+}
+
 fn main() {
     let device = env::args().nth(1).expect("Provide camera device");
 
-    println!("Waiting for camera... ");
+    eprintln!("Waiting for camera... ");
     let cam = loop {
         match cam::Cam::new(&device) {
             Ok(cam) => break cam,
-            Err(_) => thread::sleep(time::Duration::from_secs(1)),
+            Err(e) => {
+                println!("{:?}", e);
+                thread::sleep(time::Duration::from_secs(1))
+            },
         }
     };
-
-    println!("Got: {}, {:?}, {:?}",
-        str::from_utf8(&cam.get_format())
-            .unwrap_or(&format!("{:?}", &cam.get_format())),
-        cam.get_resolution(), cam.get_interval());
 
     let resolution = cam.get_resolution();
 
@@ -77,15 +80,17 @@ fn main() {
 
     let physical = vulkano::instance::PhysicalDevice::enumerate(&instance)
                             .next().expect("no device available");
-    println!("Using device: {} (type: {:?})", physical.name(), physical.ty());
+    eprintln!("Using device: {} (type: {:?})", physical.name(), physical.ty());
 
     let mut events_loop = winit::EventsLoop::new();
     let surface = winit::WindowBuilder::new()
         .with_title("Camera")
         .with_dimensions(dimensions[0], dimensions[1])
         .with_min_dimensions(dimensions[0], dimensions[1])
-        //.with_fullscreen(winit::get_primary_monitor())
-        .build_vk_surface(&events_loop, instance.clone()).unwrap();
+        .with_decorations(true)
+        //.with_fullscreen(Some(events_loop.get_primary_monitor()))
+        .build_vk_surface(&events_loop, instance.clone())
+        .expect("failed to build window");
 
     let queue = physical.queue_families().find(|&q|
         q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
@@ -249,7 +254,12 @@ fn main() {
         .build().unwrap()
     );
 
-    let mut framebuffers: Option<Vec<Arc<Framebuffer<_,_>>>> = None;
+    let mut framebuffers: Vec<Arc<Framebuffer<_,_>>> = images.iter()
+        .map(|image|
+            Arc::new(Framebuffer::start(renderpass.clone())
+                 .add(image.clone()).unwrap()
+                 .build().unwrap())
+        ).collect::<Vec<Arc<Framebuffer<_,_>>>>();
 
     let mut recreate_swapchain = false;
 
@@ -265,13 +275,12 @@ fn main() {
     let mut old_offset = push_consts.offset;
     let mut grid_on = false;
 
-    let mut frame_buf = vec![[0u8; 3]; (resolution.0*resolution.1) as usize];
     let mut frame_ts = 0u64;
 
-    let mut cpu_buf = Arc::new(CpuAccessibleBuffer::from_iter(
-        device.clone(), BufferUsage::all(),
-        cam_mutex.lock().unwrap().buf.iter().map(|v| [v[0], v[1], v[2], 255]),
-    ).expect("CPU buf allocation error"));
+    let buf_pool = CpuBufferPool::upload(device.clone());
+    let mut chunk = buf_pool.chunk(
+        (0..resolution.0*resolution.1).map(|_| [0, 0, 0, 255]))
+        .unwrap();
 
     loop {
         previous_frame.cleanup_finished();
@@ -281,17 +290,16 @@ fn main() {
                 .expect("failed to get surface capabilities")
                 .current_extent.unwrap_or(dimensions);
 
-            let new_swapchain = swapchain.recreate_with_dimension(dimensions);
-            let (new_swapchain, new_images) = match new_swapchain {
-                Ok(r) => r,
+            match swapchain.recreate_with_dimension(dimensions) {
+                Ok((new_swapchain, new_images)) => {
+                    swapchain = new_swapchain;
+                    images = new_images;
+                },
                 Err(SwapchainCreationError::UnsupportedDimensions) => {
                     continue;
                 },
                 Err(err) => panic!("{:?}", err)
             };
-
-            std::mem::replace(&mut swapchain, new_swapchain);
-            std::mem::replace(&mut images, new_images);
 
             let r_p1 = (dimensions[0] as f32)/(dimensions[1] as f32);
             let r_p2 = (resolution.0 as f32)/(resolution.1 as f32);
@@ -302,18 +310,13 @@ fn main() {
                 [1.0, r_p1/r_p2]
             };
 
-            framebuffers = None;
-
-            recreate_swapchain = false;
-        }
-
-        if framebuffers.is_none() {
-            let new_framebuffers = Some(images.iter().map(|image|
+            framebuffers = images.iter().map(|image|
                 Arc::new(Framebuffer::start(renderpass.clone())
                          .add(image.clone()).unwrap()
                          .build().unwrap())
-            ).collect::<Vec<_>>());
-            std::mem::replace(&mut framebuffers, new_framebuffers);
+                ).collect::<Vec<_>>();
+
+            recreate_swapchain = false;
         }
 
         let next_img = acquire_next_image(swapchain.clone(), None);
@@ -326,7 +329,7 @@ fn main() {
             Err(err) => panic!("{:?}", err)
         };
 
-        let dyn_state = vulkano::command_buffer::DynamicState {
+        let dyn_state = DynamicState {
             line_width: None,
             viewports: Some(vec![Viewport {
                 origin: [0.0, 0.0],
@@ -336,35 +339,25 @@ fn main() {
             scissors: None,
         };
 
-        let mut cbb = AutoCommandBufferBuilder
-                    ::primary_one_time_submit(device.clone(), queue.family())
-            .unwrap();
-
         {
-            let mut guard = cam_mutex.lock().unwrap();
-            if guard.ts != frame_ts {
-                std::mem::swap(&mut guard.buf, &mut frame_buf);
+            let guard = cam_mutex.lock().unwrap();
+            let flag = guard.ts != frame_ts;
+            if flag {
                 frame_ts = guard.ts;
-                cpu_buf = Arc::new(CpuAccessibleBuffer::from_iter(
-                    device.clone(), BufferUsage::all(),
-                    frame_buf.iter().map(|v| [v[0], v[1], v[2], 255]),
-                ).expect("CPU buf allocation error"));
-
-                cbb = cbb
-                    .copy_buffer_to_image(cpu_buf.clone(), texture.clone())
-                    .expect("Failed to copy data to texture");
+                match buf_pool.chunk(guard.buf.iter().map(rgb2rgba)) {
+                    Ok(c) => chunk = c,
+                    Err(e) => println!("BufPool error: {:?}", e),
+                }
             }
         };
 
-        if true  {
-            cbb = cbb
-                .copy_buffer_to_image(cpu_buf.clone(), texture.clone())
-                .expect("Failed to copy data to texture");
-        }
-
-        cbb = cbb
+        let mut cbb = AutoCommandBufferBuilder
+            ::primary_one_time_submit(device.clone(), queue.family())
+            .unwrap()
+            .copy_buffer_to_image(chunk.clone(), texture.clone())
+            .expect("Failed to copy data to texture")
             .begin_render_pass(
-                framebuffers.as_ref().unwrap()[image_num].clone(), false,
+                framebuffers[image_num].clone(), false,
                 vec![[0.0, 0.0, 0.0, 1.0].into()]).unwrap()
             .draw(
                 pipeline.clone(),
