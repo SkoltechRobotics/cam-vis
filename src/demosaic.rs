@@ -1,8 +1,7 @@
-use std::io::Cursor;
 use std::slice;
-use bayer;
 
 use cam::Cam;
+use rggb;
 
 fn demosaic_rggb(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     assert_eq!(buf.len(), cam.get_pixels());
@@ -14,19 +13,7 @@ fn demosaic_rggb(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     };
 
     let res = cam.get_resolution();
-    let mut dst = bayer::RasterMut::new(
-        res.0 as usize, res.1 as usize,
-        bayer::RasterDepth::Depth8,
-        buf2,
-    );
-
-    bayer::run_demosaic(
-        &mut Cursor::new(frame),
-        bayer::BayerDepth::Depth8,
-        bayer::CFA::RGGB,
-        bayer::Demosaic::Linear,
-        &mut dst
-    ).unwrap();
+    rggb::demosaic(frame, buf2, res.0 as usize, res.1 as usize);
 }
 
 fn demosaic_yuyv(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
@@ -81,8 +68,8 @@ fn demosaic_bgr3(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     assert_eq!(frame.len(), cam.get_frame_size());
     assert_eq!(frame.len(), 3*buf.len());
 
-    for (i, pix) in buf.iter_mut().enumerate() {
-        *pix = [frame[3*i+2], frame[3*i+1], frame[3*i]];
+    for (rgba, rgb) in buf.iter_mut().zip(frame.exact_chunks(3)) {
+        *rgba = [rgb[2], rgb[1], rgb[0]];
     }
 }
 
@@ -91,8 +78,8 @@ fn demosaic_rgb3(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     assert_eq!(frame.len(), cam.get_frame_size());
     assert_eq!(frame.len(), 3*buf.len());
 
-    for (i, pix) in buf.iter_mut().enumerate() {
-        *pix = [frame[3*i], frame[3*i+1], frame[3*i+2]];
+    for (rgba, rgb) in buf.iter_mut().zip(frame.exact_chunks(3)) {
+        *rgba = [rgb[0], rgb[1], rgb[2]];
     }
 }
 

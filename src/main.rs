@@ -1,6 +1,6 @@
+#![feature(exact_chunks)]
 extern crate rscam;
 extern crate winit;
-extern crate bayer;
 
 #[macro_use]
 extern crate vulkano;
@@ -24,6 +24,8 @@ use vulkano::pipeline::viewport::Viewport;
 use vulkano::device::Device;
 use vulkano::command_buffer::DynamicState;
 
+use winit::dpi::LogicalSize;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{thread, env, time, str};
@@ -32,6 +34,7 @@ const DEFAULT_DIMENSIONS: [u32; 2] = [2448/4, 2048/4];
 
 mod cam;
 mod demosaic;
+mod rggb;
 
 mod vs;
 mod fs;
@@ -51,9 +54,8 @@ struct PushConstant {
     zoom: f32,
 }
 
-#[inline]
-fn rgb2rgba(v: &[u8; 3]) -> [u8; 4] {
-    [v[0], v[1], v[2], 255]
+fn rgb2rgba(pix: &[u8; 3]) -> [u8; 4] {
+    [pix[0], pix[1], pix[2], 255]
 }
 
 fn main() {
@@ -85,12 +87,15 @@ fn main() {
     let mut events_loop = winit::EventsLoop::new();
     let surface = winit::WindowBuilder::new()
         .with_title("Camera")
-        .with_dimensions(dimensions[0], dimensions[1])
-        .with_min_dimensions(dimensions[0], dimensions[1])
+        .with_dimensions((dimensions[0], dimensions[1]).into())
+        .with_min_dimensions((dimensions[0], dimensions[1]).into())
         .with_decorations(true)
         //.with_fullscreen(Some(events_loop.get_primary_monitor()))
         .build_vk_surface(&events_loop, instance.clone())
         .expect("failed to build window");
+
+    //surface.window().get_hidpi_factor(); does not work on wayland yet
+    let hidpi = 2.0;
 
     let queue = physical.queue_families().find(|&q|
         q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
@@ -279,7 +284,7 @@ fn main() {
 
     let buf_pool = CpuBufferPool::upload(device.clone());
     let mut chunk = buf_pool.chunk(
-        (0..resolution.0*resolution.1).map(|_| [0, 0, 0, 255]))
+        (0..resolution.0*resolution.1).map(|_| [0u8, 0, 0, 255]))
         .unwrap();
 
     loop {
@@ -346,7 +351,7 @@ fn main() {
                 frame_ts = guard.ts;
                 match buf_pool.chunk(guard.buf.iter().map(rgb2rgba)) {
                     Ok(c) => chunk = c,
-                    Err(e) => println!("BufPool error: {:?}", e),
+                    Err(e) => eprintln!("BufPool error: {:?}", e),
                 }
             }
         };
@@ -392,80 +397,72 @@ fn main() {
 
         let mut done = false;
         events_loop.poll_events(|ev| {
+            use winit::Event::WindowEvent;
+            use winit::WindowEvent::*;
+
             match ev {
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::Closed, ..
-                } |
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::KeyboardInput {
+                WindowEvent { event: CloseRequested, .. } => done = true,
+                WindowEvent {
+                    event: KeyboardInput {
                         input: winit::KeyboardInput {
                             state: winit::ElementState::Pressed,
-                            virtual_keycode: Some(winit::VirtualKeyCode::Escape),
-                            ..
-                        }, ..
-                    }, ..
-                }
-                => done = true,
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::KeyboardInput {
-                        input: winit::KeyboardInput {
-                            state: winit::ElementState::Pressed,
-                            virtual_keycode: Some(winit::VirtualKeyCode::G),
-                            ..
-                        }, ..
-                    }, ..
-                } => grid_on = !grid_on,
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::KeyboardInput {
-                        input: winit::KeyboardInput {
-                            state: winit::ElementState::Pressed,
-                            virtual_keycode: Some(winit::VirtualKeyCode::Space),
-                            ..
-                        }, ..
-                    }, ..
-                } => { pause.fetch_nand(true, Ordering::Relaxed); },
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::KeyboardInput {
-                        input: winit::KeyboardInput {
-                            state: winit::ElementState::Pressed,
-                            virtual_keycode: Some(winit::VirtualKeyCode::R),
+                            virtual_keycode: Some(keycode),
                             ..
                         }, ..
                     }, ..
                 } => {
-                    push_consts.zoom = 1.0;
-                    push_consts.offset = [0.5, 0.5];
+                    use winit::VirtualKeyCode::*;
+                    match keycode {
+                        Escape => done = true,
+                        Space => { pause.fetch_nand(true, Ordering::Relaxed); },
+                        G => grid_on = !grid_on,
+                        R => {
+                            push_consts.zoom = 1.0;
+                            push_consts.offset = [0.5, 0.5];
+                        },
+                        _ => (),
+                    }
                 },
+
                 winit::Event::WindowEvent {
-                    event: winit::WindowEvent::Resized (x, y), ..
+                    event: winit::WindowEvent::Resized (LogicalSize { width, height } ), ..
                 } => {
                     recreate_swapchain = true;
-                    dimensions = [x, y];
+                    dimensions = [(hidpi*width) as u32, (hidpi*height) as u32];
                 },
                 winit::Event::WindowEvent {
-                    event: winit::WindowEvent::MouseWheel{
-                        delta: winit::MouseScrollDelta::LineDelta(_, d),
+                    event: winit::WindowEvent::MouseWheel {
+                        delta,
                         phase: winit::TouchPhase::Moved,
                         ..
                     }, ..
                 } => {
-                    if d > 0. {
-                        push_consts.zoom *= 1.5;
-                    } else {
-                        push_consts.zoom /= 1.5;
-                        //if push_consts.zoom < 1.0 { push_consts.zoom = 1.; }
+                    match delta {
+                        winit::MouseScrollDelta::LineDelta(_, d) => {
+                            if d > 0. {
+                                push_consts.zoom *= 1.5;
+                            } else if d < 0.{
+                                push_consts.zoom /= 1.5;
+                            }
+                        },
+                        winit::MouseScrollDelta::PixelDelta(
+                            winit::dpi::LogicalPosition { y, .. }
+                        ) => {
+                            push_consts.zoom *= 1.03f32.powf(y as f32)
+                        },
                     }
                 },
                 winit::Event::WindowEvent {
                     event: winit::WindowEvent::CursorMoved {
-                        position: (x, y),
+                        position: winit::dpi::LogicalPosition { x, y },
                         ..
                     },
                     ..
                 } => {
+                    let x = hidpi*x;
+                    let y = hidpi*y;
                     if lmb_pressed {
                         if let Some(xy) = old_coor {
-
                             let z = push_consts.zoom;
                             let k_x =
                                 -push_consts.aspect[0]*(dimensions[0] as f32)*z;

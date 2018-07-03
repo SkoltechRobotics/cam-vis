@@ -8,9 +8,14 @@ documentation = "https://docs.rs/cam-vis"
 repository = "https://github.com/SkoltechRobotics/cam-vis"
 
 [dependencies]
-vulkano = "0.9"
-vulkano-win = "0.9"
-vulkano-shader-derive = "0.9"
-winit = "0.11"
+#vulkano = "0.9"
+#vulkano-win = "0.9"
+#vulkano-shader-derive = "0.9"
+vulkano = { path = "../vulkano/vulkano/" }
+vulkano-win = { path = "../vulkano/vulkano-win/" }
+vulkano-shader-derive = { path = "../vulkano/vulkano-shader-derive/" }
+winit = "0.16"
 rscam = "^0.5.4"
-bayer = "0.1"
+
+[profile.release]
+lto = true
