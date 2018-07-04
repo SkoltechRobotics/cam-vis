@@ -276,7 +276,8 @@ fn main() {
     };
 
     let mut lmb_pressed = false;
-    let mut old_coor: Option<[f32; 2]> = None;
+    let mut init_coor = [0f32; 2];
+    let mut mouse_coor = [0f32; 2];
     let mut old_offset = push_consts.offset;
     let mut grid_on = false;
 
@@ -459,23 +460,17 @@ fn main() {
                     },
                     ..
                 } => {
-                    let x = hidpi*x;
-                    let y = hidpi*y;
+                    let x = (hidpi*x) as f32;
+                    let y = (hidpi*y) as f32;
+                    mouse_coor = [x, y];
                     if lmb_pressed {
-                        if let Some(xy) = old_coor {
-                            let z = push_consts.zoom;
-                            let k_x =
-                                -push_consts.aspect[0]*(dimensions[0] as f32)*z;
-                            let k_y =
-                                -push_consts.aspect[1]*(dimensions[1] as f32)*z;
-                            push_consts.offset[0] = old_offset[0]
-                                + (x as f32 - xy[0])/k_x;
-                            push_consts.offset[1] = old_offset[1]
-                                + (y as f32 - xy[1])/k_y;
-                        } else {
-                            old_coor = Some([x as f32, y as f32]);
-                            old_offset = push_consts.offset;
-                        }
+                        let z = push_consts.zoom;
+                        let dim = dimensions;
+                        let ic = init_coor;
+                        let k_x = -push_consts.aspect[0]*(dim[0] as f32)*z;
+                        let k_y = -push_consts.aspect[1]*(dim[1] as f32)*z;
+                        push_consts.offset[0] = old_offset[0] + (x - ic[0])/k_x;
+                        push_consts.offset[1] = old_offset[1] + (y - ic[1])/k_y;
                     }
                 },
                 winit::Event::WindowEvent {
@@ -486,8 +481,9 @@ fn main() {
                     }, ..
                 } => {
                     lmb_pressed = state == winit::ElementState::Pressed;
-                    if !lmb_pressed {
-                        old_coor = None;
+                    if lmb_pressed {
+                        old_offset = push_consts.offset;
+                        init_coor = mouse_coor;
                     }
                 },
                 _ => (), //println!("{:?}", ev),
