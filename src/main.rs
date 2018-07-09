@@ -88,13 +88,14 @@ fn main() {
     let surface = winit::WindowBuilder::new()
         .with_title("Camera")
         .with_dimensions((dimensions[0], dimensions[1]).into())
-        .with_min_dimensions((dimensions[0], dimensions[1]).into())
+        //.with_min_dimensions((dimensions[0], dimensions[1]).into())
         .with_decorations(true)
         //.with_fullscreen(Some(events_loop.get_primary_monitor()))
         .build_vk_surface(&events_loop, instance.clone())
         .expect("failed to build window");
 
     //surface.window().get_hidpi_factor(); does not work on wayland yet
+    println!("get_hidpi_factor: {:?}", surface.window().get_hidpi_factor());
     let hidpi = 2.0;
 
     let queue = physical.queue_families().find(|&q|
@@ -137,10 +138,10 @@ fn main() {
     let vertex_buffer = CpuAccessibleBuffer::<[Vertex]>::from_iter(
         device.clone(), vulkano::buffer::BufferUsage::all(),
        [
-           Vertex { position: [-1.0, -1.0 ] },
-           Vertex { position: [-1.0,  1.0 ] },
-           Vertex { position: [ 1.0, -1.0 ] },
-           Vertex { position: [ 1.0,  1.0 ] },
+            Vertex { position: [-1.0, -1.0 ] },
+            Vertex { position: [-1.0,  1.0 ] },
+            Vertex { position: [ 1.0, -1.0 ] },
+            Vertex { position: [ 1.0,  1.0 ] },
        ].iter().cloned()
     ).expect("failed to create buffer");
 
@@ -272,7 +273,7 @@ fn main() {
     let mut previous_frame = prev_frame as Box<GpuFuture>;
 
     let mut push_consts = PushConstant{
-        aspect: [1.0, 1.0], zoom: 1.0, offset: [0.5, 0.5],
+        aspect: [1.0, 1.0], zoom: 1.0, offset: [0., 0.],
     };
 
     let mut lmb_pressed = false;
@@ -419,7 +420,7 @@ fn main() {
                         G => grid_on = !grid_on,
                         R => {
                             push_consts.zoom = 1.0;
-                            push_consts.offset = [0.5, 0.5];
+                            push_consts.offset = [0., 0.];
                         },
                         _ => (),
                     }
@@ -438,20 +439,27 @@ fn main() {
                         ..
                     }, ..
                 } => {
-                    match delta {
-                        winit::MouseScrollDelta::LineDelta(_, d) => {
-                            if d > 0. {
-                                push_consts.zoom *= 1.5;
-                            } else if d < 0.{
-                                push_consts.zoom /= 1.5;
-                            }
+                    let new_zoom = match delta {
+                        winit::MouseScrollDelta::LineDelta(_, d) => if d > 0. {
+                            push_consts.zoom * 1.5
+                        } else {
+                            push_consts.zoom / 1.5
                         },
                         winit::MouseScrollDelta::PixelDelta(
                             winit::dpi::LogicalPosition { y, .. }
                         ) => {
-                            push_consts.zoom *= 1.03f32.powf(y as f32)
+                            push_consts.zoom * 1.03f32.powf(y as f32)
                         },
-                    }
+                    };
+
+                    let xg = 2.*mouse_coor[0]/(dimensions[0] as f32) - 1.;
+                    let yg = 2.*mouse_coor[1]/(dimensions[1] as f32) - 1.;
+
+                    let k = (1./new_zoom - 1./push_consts.zoom)/2.;
+
+                    push_consts.offset[0] += k*xg/push_consts.aspect[0];
+                    push_consts.offset[1] += k*yg/push_consts.aspect[1];
+                    push_consts.zoom = new_zoom;
                 },
                 winit::Event::WindowEvent {
                     event: winit::WindowEvent::CursorMoved {
@@ -467,8 +475,8 @@ fn main() {
                         let z = push_consts.zoom;
                         let dim = dimensions;
                         let ic = init_coor;
-                        let k_x = -push_consts.aspect[0]*(dim[0] as f32)*z;
-                        let k_y = -push_consts.aspect[1]*(dim[1] as f32)*z;
+                        let k_x = push_consts.aspect[0]*(dim[0] as f32)*z;
+                        let k_y = push_consts.aspect[1]*(dim[1] as f32)*z;
                         push_consts.offset[0] = old_offset[0] + (x - ic[0])/k_x;
                         push_consts.offset[1] = old_offset[1] + (y - ic[1])/k_y;
                     }

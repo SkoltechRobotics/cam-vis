@@ -11,11 +11,8 @@ repository = "https://github.com/SkoltechRobotics/cam-vis"
 #vulkano = "0.9"
 #vulkano-win = "0.9"
 #vulkano-shader-derive = "0.9"
-vulkano = { path = "../vulkano/vulkano/" }
-vulkano-win = { path = "../vulkano/vulkano-win/" }
-vulkano-shader-derive = { path = "../vulkano/vulkano-shader-derive/" }
+vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
+vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
+vulkano-shader-derive = { git = "https://github.com/vulkano-rs/vulkano" }
 winit = "0.16"
 rscam = "^0.5.4"
-
-[profile.release]
-lto = true
