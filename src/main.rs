@@ -24,8 +24,6 @@ use vulkano::pipeline::viewport::Viewport;
 use vulkano::device::Device;
 use vulkano::command_buffer::DynamicState;
 
-use winit::dpi::LogicalSize;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{thread, env, time, str};
@@ -77,7 +75,7 @@ fn main() {
     let mut dimensions = DEFAULT_DIMENSIONS;
 
     let extensions = vulkano_win::required_extensions();
-    let instance = vulkano::instance::Instance::new(None, &extensions, &[])
+    let instance = vulkano::instance::Instance::new(None, &extensions, None)
         .expect("failed to create instance");
 
     let physical = vulkano::instance::PhysicalDevice::enumerate(&instance)
@@ -94,9 +92,7 @@ fn main() {
         .build_vk_surface(&events_loop, instance.clone())
         .expect("failed to build window");
 
-    //surface.window().get_hidpi_factor(); does not work on wayland yet
-    println!("get_hidpi_factor: {:?}", surface.window().get_hidpi_factor());
-    let hidpi = 2.0;
+    let mut hidpi = surface.window().get_hidpi_factor();
 
     let queue = physical.queue_families().find(|&q|
         q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
@@ -348,8 +344,7 @@ fn main() {
 
         {
             let guard = cam_mutex.lock().unwrap();
-            let flag = guard.ts != frame_ts;
-            if flag {
+            if guard.ts != frame_ts {
                 frame_ts = guard.ts;
                 match buf_pool.chunk(guard.buf.iter().map(rgb2rgba)) {
                     Ok(c) => chunk = c,
@@ -368,7 +363,7 @@ fn main() {
                 vec![[0.0, 0.0, 0.0, 1.0].into()]).unwrap()
             .draw(
                 pipeline.clone(),
-                dyn_state.clone(),
+                &dyn_state,
                 vertex_buffer.clone(),
                 set.clone(), push_consts,
             ).expect("Main pipeline draw fail");
@@ -377,13 +372,13 @@ fn main() {
             cbb = cbb
                 .draw(
                     grid_pipeline.clone(),
-                    dyn_state.clone(),
+                    &dyn_state,
                     grid_vertex_buffer.clone(),
                     (), push_consts,
                 ).expect("Cross pipeline draw fail")
                 .draw(
                     cross_pipeline.clone(),
-                    dyn_state.clone(),
+                    &dyn_state,
                     cross_vertex_buffer.clone(),
                     (), push_consts,
                 ).expect("Cross pipeline draw fail");
@@ -395,106 +390,105 @@ fn main() {
             .then_execute(queue.clone(), cb).expect("fail2")
             .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
             .then_signal_fence_and_flush().expect("fail1");
-        previous_frame = Box::new(future) as Box<_>;
+        previous_frame = Box::new(future) as Box<vulkano::sync::GpuFuture>;
 
         let mut done = false;
-        events_loop.poll_events(|ev| {
-            use winit::Event::WindowEvent;
-            use winit::WindowEvent::*;
+        events_loop.poll_events(|event| {
+            if let winit::Event::WindowEvent{ event, .. } = event {
+                use winit::WindowEvent::*;
 
-            match ev {
-                WindowEvent { event: CloseRequested, .. } => done = true,
-                WindowEvent {
-                    event: KeyboardInput {
+                match event {
+                    CloseRequested => done = true,
+                    HiDpiFactorChanged(val) => hidpi = val,
+                    Resized(size) => {
+                        recreate_swapchain = true;
+                        dimensions = [
+                            (hidpi*size.width) as u32,
+                            (hidpi*size.height) as u32,
+                        ];
+                    },
+                    KeyboardInput {
                         input: winit::KeyboardInput {
                             state: winit::ElementState::Pressed,
                             virtual_keycode: Some(keycode),
                             ..
                         }, ..
-                    }, ..
-                } => {
-                    use winit::VirtualKeyCode::*;
-                    match keycode {
-                        Escape => done = true,
-                        Space => { pause.fetch_nand(true, Ordering::Relaxed); },
-                        G => grid_on = !grid_on,
-                        R => {
-                            push_consts.zoom = 1.0;
-                            push_consts.offset = [0., 0.];
-                        },
-                        _ => (),
-                    }
-                },
-
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::Resized (LogicalSize { width, height } ), ..
-                } => {
-                    recreate_swapchain = true;
-                    dimensions = [(hidpi*width) as u32, (hidpi*height) as u32];
-                },
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::MouseWheel {
+                    } => {
+                        use winit::VirtualKeyCode::*;
+                        match keycode {
+                            Escape => done = true,
+                            Space => {
+                                pause.fetch_nand(true, Ordering::Relaxed);
+                            },
+                            G => grid_on = !grid_on,
+                            R => {
+                                push_consts.zoom = 1.0;
+                                push_consts.offset = [0., 0.];
+                            },
+                            _ => (),
+                        }
+                    },
+                    winit::WindowEvent::MouseWheel {
                         delta,
                         phase: winit::TouchPhase::Moved,
                         ..
-                    }, ..
-                } => {
-                    let new_zoom = match delta {
-                        winit::MouseScrollDelta::LineDelta(_, d) => if d > 0. {
-                            push_consts.zoom * 1.5
-                        } else {
-                            push_consts.zoom / 1.5
-                        },
-                        winit::MouseScrollDelta::PixelDelta(
-                            winit::dpi::LogicalPosition { y, .. }
-                        ) => {
-                            push_consts.zoom * 1.03f32.powf(y as f32)
-                        },
-                    };
+                    } => {
+                        use winit::MouseScrollDelta::*;
 
-                    let xg = 2.*mouse_coor[0]/(dimensions[0] as f32) - 1.;
-                    let yg = 2.*mouse_coor[1]/(dimensions[1] as f32) - 1.;
+                        let new_zoom = match delta {
+                            LineDelta(_, d) => if d > 0. {
+                                push_consts.zoom * 1.5
+                            } else {
+                                push_consts.zoom / 1.5
+                            },
+                            PixelDelta(
+                                winit::dpi::LogicalPosition { y, .. }
+                            ) => {
+                                push_consts.zoom * 1.03f32.powf(y as f32)
+                            },
+                        };
 
-                    let k = (1./new_zoom - 1./push_consts.zoom)/2.;
+                        let xg = 2.*mouse_coor[0]/(dimensions[0] as f32) - 1.;
+                        let yg = 2.*mouse_coor[1]/(dimensions[1] as f32) - 1.;
 
-                    push_consts.offset[0] += k*xg/push_consts.aspect[0];
-                    push_consts.offset[1] += k*yg/push_consts.aspect[1];
-                    push_consts.zoom = new_zoom;
-                },
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::CursorMoved {
+                        let k = (1./new_zoom - 1./push_consts.zoom)/2.;
+
+                        push_consts.offset[0] += k*xg/push_consts.aspect[0];
+                        push_consts.offset[1] += k*yg/push_consts.aspect[1];
+                        push_consts.zoom = new_zoom;
+                    },
+                    CursorMoved {
                         position: winit::dpi::LogicalPosition { x, y },
                         ..
+                    } => {
+                        let x = (hidpi*x) as f32;
+                        let y = (hidpi*y) as f32;
+                        mouse_coor = [x, y];
+                        if lmb_pressed {
+                            let z = push_consts.zoom;
+                            let dim = dimensions;
+                            let ic = init_coor;
+                            let k_x = push_consts.aspect[0]*(dim[0] as f32)*z;
+                            let k_y = push_consts.aspect[1]*(dim[1] as f32)*z;
+                            push_consts.offset = [
+                                old_offset[0] + (x - ic[0])/k_x,
+                                old_offset[1] + (y - ic[1])/k_y,
+                            ];
+                        }
                     },
-                    ..
-                } => {
-                    let x = (hidpi*x) as f32;
-                    let y = (hidpi*y) as f32;
-                    mouse_coor = [x, y];
-                    if lmb_pressed {
-                        let z = push_consts.zoom;
-                        let dim = dimensions;
-                        let ic = init_coor;
-                        let k_x = push_consts.aspect[0]*(dim[0] as f32)*z;
-                        let k_y = push_consts.aspect[1]*(dim[1] as f32)*z;
-                        push_consts.offset[0] = old_offset[0] + (x - ic[0])/k_x;
-                        push_consts.offset[1] = old_offset[1] + (y - ic[1])/k_y;
-                    }
-                },
-                winit::Event::WindowEvent {
-                    event: winit::WindowEvent::MouseInput {
+                    MouseInput {
                         state,
                         button: winit::MouseButton::Left,
                         ..
-                    }, ..
-                } => {
-                    lmb_pressed = state == winit::ElementState::Pressed;
-                    if lmb_pressed {
-                        old_offset = push_consts.offset;
-                        init_coor = mouse_coor;
-                    }
-                },
-                _ => (), //println!("{:?}", ev),
+                    } => {
+                        lmb_pressed = state == winit::ElementState::Pressed;
+                        if lmb_pressed {
+                            old_offset = push_consts.offset;
+                            init_coor = mouse_coor;
+                        }
+                    },
+                    _ => (), //println!("{:?}", ev),
+                }
             }
         });
         if done { return; }

@@ -8,11 +8,8 @@ documentation = "https://docs.rs/cam-vis"
 repository = "https://github.com/SkoltechRobotics/cam-vis"
 
 [dependencies]
-#vulkano = "0.9"
-#vulkano-win = "0.9"
-#vulkano-shader-derive = "0.9"
-vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
-vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
-vulkano-shader-derive = { git = "https://github.com/vulkano-rs/vulkano" }
-winit = "0.16"
+vulkano = "0.10"
+vulkano-win = "0.10"
+vulkano-shader-derive = "0.10"
+winit = "0.17"
 rscam = "^0.5.4"
