@@ -2,14 +2,20 @@
 name = "cam-vis"
 version = "0.1.0"
 authors = ["Artyom Pavlov<newpavlov@gmail.com>"]
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 description = "Simple camera visualization tool"
 documentation = "https://docs.rs/cam-vis"
 repository = "https://github.com/SkoltechRobotics/cam-vis"
 
 [dependencies]
-vulkano = "0.10"
-vulkano-win = "0.10"
-vulkano-shader-derive = "0.10"
-winit = "0.17"
+vulkano = "0.11"
+vulkano-shaders = "0.11"
+vulkano-win = "0.11"
+winit = "0.18"
 rscam = "^0.5.4"
+png = "0.13"
+structopt = "0.2"
+structopt-derive = "0.2"
+
+[profile.release]
+lto = true

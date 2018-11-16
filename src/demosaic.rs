@@ -68,7 +68,7 @@ fn demosaic_bgr3(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     assert_eq!(frame.len(), cam.get_frame_size());
     assert_eq!(frame.len(), 3*buf.len());
 
-    for (rgba, rgb) in buf.iter_mut().zip(frame.exact_chunks(3)) {
+    for (rgba, rgb) in buf.iter_mut().zip(frame.chunks_exact(3)) {
         *rgba = [rgb[2], rgb[1], rgb[0]];
     }
 }
@@ -78,7 +78,7 @@ fn demosaic_rgb3(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     assert_eq!(frame.len(), cam.get_frame_size());
     assert_eq!(frame.len(), 3*buf.len());
 
-    for (rgba, rgb) in buf.iter_mut().zip(frame.exact_chunks(3)) {
+    for (rgba, rgb) in buf.iter_mut().zip(frame.chunks_exact(3)) {
         *rgba = [rgb[0], rgb[1], rgb[2]];
     }
 }

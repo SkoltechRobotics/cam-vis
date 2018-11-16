@@ -1,12 +1,12 @@
-#![feature(exact_chunks)]
 extern crate rscam;
 extern crate winit;
+extern crate png;
 
-#[macro_use]
-extern crate vulkano;
-#[macro_use]
-extern crate vulkano_shader_derive;
+#[macro_use] extern crate vulkano;
+extern crate vulkano_shaders;
 extern crate vulkano_win;
+extern crate structopt;
+#[macro_use] extern crate structopt_derive;
 
 use vulkano_win::VkSurfaceBuild;
 use vulkano::sync::GpuFuture;
@@ -24,21 +24,24 @@ use vulkano::pipeline::viewport::Viewport;
 use vulkano::device::Device;
 use vulkano::command_buffer::DynamicState;
 
+use png::HasParameters;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{thread, env, time, str};
+use std::{str, slice};
+use std::fs::File;
+use std::io::BufWriter;
+
+use structopt::StructOpt;
 
 const DEFAULT_DIMENSIONS: [u32; 2] = [2448/4, 2048/4];
 
 mod cam;
 mod demosaic;
 mod rggb;
+mod cli;
 
-mod vs;
-mod fs;
-mod vs2;
-mod fs2;
-mod fs2_5;
+mod shaders;
 
 #[derive(Debug, Clone)]
 struct Vertex { position: [f32; 2] }
@@ -56,19 +59,11 @@ fn rgb2rgba(pix: &[u8; 3]) -> [u8; 4] {
     [pix[0], pix[1], pix[2], 255]
 }
 
-fn main() {
-    let device = env::args().nth(1).expect("Provide camera device");
+fn main() -> Result<(), Box<std::error::Error>> {
+    let args = cli::Cli::from_args();
 
     eprintln!("Waiting for camera... ");
-    let cam = loop {
-        match cam::Cam::new(&device) {
-            Ok(cam) => break cam,
-            Err(e) => {
-                println!("{:?}", e);
-                thread::sleep(time::Duration::from_secs(1))
-            },
-        }
-    };
+    let cam = cam::Cam::new(&args.camera)?;
 
     let resolution = cam.get_resolution();
 
@@ -109,6 +104,7 @@ fn main() {
 
 
     let pause = Arc::new(AtomicBool::new(false));
+    let is_grey = &cam.get_format() == b"GREY";
     let cam_mutex = cam.run_worker(pause.clone());
 
 
@@ -127,7 +123,7 @@ fn main() {
             device.clone(), surface.clone(), caps.min_image_count,
             format, dimensions, 1, usage, &queue,
             vulkano::swapchain::SurfaceTransform::Identity, alpha,
-            vulkano::swapchain::PresentMode::Mailbox, true, None
+            args.mode, true, None
         ).expect("failed to create swapchain")
     };
 
@@ -141,25 +137,18 @@ fn main() {
        ].iter().cloned()
     ).expect("failed to create buffer");
 
-    let cross_vertex_buffer = CpuAccessibleBuffer::<[Vertex]>::from_iter(
-        device.clone(), vulkano::buffer::BufferUsage::all(),
-       [
-           Vertex { position: [-1.0,  0.0 ] },
-           Vertex { position: [ 1.0,  0.0 ] },
-           Vertex { position: [ 0.0, -1.0 ] },
-           Vertex { position: [ 0.0,  1.0 ] },
-       ].iter().cloned()
-    ).expect("failed to create buffer");
+    let mut grid = Vec::new();
 
-    let mut grid = Vec::with_capacity(6*2*2);
+    let w_f32 = (resolution.0 as f32)/2.;
+    for i in (args.grid_step..resolution.0).step_by(args.grid_step as usize) {
+        let c = (i as f32)/w_f32 - 1.;
+        grid.extend_from_slice(&[[c, -1.], [c, 1.]]);
+    }
 
-    for c in (1..10).map(|i| i as f32/10.) {
-        grid.extend_from_slice(&[
-            [-1.,  c ], [ 1., c ],
-            [ c , -1.], [ c , 1.],
-            [-1., -c ], [ 1.,-c ],
-            [-c , -1.], [-c , 1.],
-        ]);
+    let h_f32 = (resolution.1 as f32)/2.;
+    for i in (args.grid_step..resolution.1).step_by(args.grid_step as usize) {
+        let c = (i as f32)/h_f32 - 1.;
+        grid.extend_from_slice(&[[-1., c], [1., c]]);
     }
 
     let grid_vertex_buffer = CpuAccessibleBuffer::<[Vertex]>::from_iter(
@@ -168,16 +157,14 @@ fn main() {
     ).expect("failed to create buffer");
 
 
-    let vs = vs::Shader::load(device.clone())
+    let vs = shaders::vs::Shader::load(device.clone())
         .expect("failed to create shader module");
-    let fs = fs::Shader::load(device.clone())
+    let fs = shaders::fs::Shader::load(device.clone())
         .expect("failed to create shader module");
 
-    let vs2 = vs2::Shader::load(device.clone())
+    let vs2 = shaders::vs2::Shader::load(device.clone())
         .expect("vs2: failed to create shader module");
-    let fs2 = fs2::Shader::load(device.clone())
-        .expect("fs2: failed to create shader module");
-    let fs2_5 = fs2_5::Shader::load(device.clone())
+    let fs2 = shaders::fs2::Shader::load(device.clone())
         .expect("fs2: failed to create shader module");
 
     let renderpass = Arc::new(
@@ -229,23 +216,12 @@ fn main() {
         .expect("Failed to build main pipeline")
     );
 
-    let cross_pipeline = Arc::new(vulkano::pipeline::GraphicsPipeline::start()
-        .vertex_input_single_buffer::<Vertex>()
-        .vertex_shader(vs2.main_entry_point(), ())
-        .line_list()
-        .viewports_dynamic_scissors_irrelevant(1)
-        .fragment_shader(fs2.main_entry_point(), ())
-        .render_pass(Subpass::from(renderpass.clone(), 0).unwrap())
-        .build(device.clone())
-        .expect("Failed to build cross pipeline")
-    );
-
     let grid_pipeline = Arc::new(vulkano::pipeline::GraphicsPipeline::start()
         .vertex_input_single_buffer::<Vertex>()
         .vertex_shader(vs2.main_entry_point(), ())
         .line_list()
         .viewports_dynamic_scissors_irrelevant(1)
-        .fragment_shader(fs2_5.main_entry_point(), ())
+        .fragment_shader(fs2.main_entry_point(), ())
         .render_pass(Subpass::from(renderpass.clone(), 0).unwrap())
         .build(device.clone())
         .expect("Failed to build grid pipeline")
@@ -375,21 +351,15 @@ fn main() {
                     &dyn_state,
                     grid_vertex_buffer.clone(),
                     (), push_consts,
-                ).expect("Cross pipeline draw fail")
-                .draw(
-                    cross_pipeline.clone(),
-                    &dyn_state,
-                    cross_vertex_buffer.clone(),
-                    (), push_consts,
-                ).expect("Cross pipeline draw fail");
+                ).expect("grid pipeline draw fail");
         }
 
         let cb = cbb.end_render_pass().unwrap().build().unwrap();
 
         let future = previous_frame.join(future)
-            .then_execute(queue.clone(), cb).expect("fail2")
+            .then_execute(queue.clone(), cb).unwrap()
             .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
-            .then_signal_fence_and_flush().expect("fail1");
+            .then_signal_fence_and_flush().unwrap();
         previous_frame = Box::new(future) as Box<vulkano::sync::GpuFuture>;
 
         let mut done = false;
@@ -425,6 +395,39 @@ fn main() {
                                 push_consts.zoom = 1.0;
                                 push_consts.offset = [0., 0.];
                             },
+                            S => {
+                                let guard = cam_mutex.lock().unwrap();
+
+                                let path = format!("{}.png", guard.ts);
+                                let file = File::create(&path).unwrap();
+
+                                let mut bw = BufWriter::new(file);
+                                let mut encoder = png::Encoder::new(
+                                    &mut bw, resolution.0, resolution.1,
+                                );
+                                encoder.set(png::BitDepth::Eight);
+                                if is_grey {
+                                    encoder.set(png::ColorType::Grayscale);
+                                    let mut w = encoder.write_header().unwrap();
+                                    let data: Vec<u8> = guard.buf
+                                        .iter()
+                                        .map(|p| p[0])
+                                        .collect();
+                                    w.write_image_data(&data).unwrap();
+                                } else {
+                                    encoder.set(png::ColorType::RGB);
+                                    let mut w = encoder.write_header().unwrap();
+                                    let buf = guard.buf.as_slice();
+                                    let data = unsafe {
+                                        slice::from_raw_parts(
+                                            buf.as_ptr() as *const u8,
+                                            3*buf.len(),
+                                        )
+                                    };
+                                    w.write_image_data(&data).unwrap();
+                                }
+                                println!("Saved: {}", path);
+                            }
                             _ => (),
                         }
                     },
@@ -491,6 +494,6 @@ fn main() {
                 }
             }
         });
-        if done { return; }
+        if done { return Ok(()); }
     }
 }
