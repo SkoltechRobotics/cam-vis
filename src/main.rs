@@ -309,6 +309,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
         }
 
         previous_frame.cleanup_finished();
+        events_loop.poll_events(|event| events::handle(event, &mut state));
 
         if state.recreate_swapchain {
             let res = state.resolution;
@@ -367,8 +368,8 @@ fn main() -> Result<(), Box<std::error::Error>> {
             let guard = state.cam_mutex.lock().unwrap();
             if guard.ts != state.frame_ts {
                 state.frame_ts = guard.ts;
-                chunk = buf_pool.chunk(guard.buf.iter()
-                    .map(rgb2rgba))
+                chunk = buf_pool
+                    .chunk(guard.buf.iter().map(rgb2rgba))
                     .unwrap();
             }
         };
@@ -406,7 +407,6 @@ fn main() -> Result<(), Box<std::error::Error>> {
             .then_signal_fence_and_flush().unwrap();
         previous_frame = Box::new(future) as Box<vulkano::sync::GpuFuture>;
 
-        events_loop.poll_events(|event| events::handle(event, &mut state));
         if state.done { return Ok(()); }
 
         fc += 1;
