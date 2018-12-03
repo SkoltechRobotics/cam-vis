@@ -19,7 +19,7 @@ FLAGS:
 
 OPTIONS:
     -g, --grid-step <grid_step>    Grid step in pixels [default: 64]
-    -m, --mode <mode>              Vulkan present mode: immediate, mailbox, fifo or relaxed [default: mailbox]
+    -m, --mode <mode>              Vulkan present mode: immediate, mailbox, fifo or relaxed [default: fifo]
 
 ARGS:
     <camera>    Path to camera device
