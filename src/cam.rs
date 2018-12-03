@@ -26,6 +26,11 @@ pub struct FrameBuf {
 
 impl Cam {
     pub fn new(dev: &str) -> Result<Self, Box<error::Error>> {
+        let mut v: Cam = unsafe { std::mem::uninitialized()};
+        v.resolution = (640, 480);
+        v.pixels = 640*480;
+        Ok(v)
+        /*
         let mut camera = Camera::new(dev)
             .map_err(Box::new)?;
 
@@ -87,6 +92,7 @@ impl Cam {
 
         let pixels = (resolution.0*resolution.1) as usize;
         Ok(Cam {camera, resolution, interval, format, frame_size, pixels})
+        */
     }
 
     pub fn run_worker(self, pause: Arc<AtomicBool>)
@@ -94,8 +100,10 @@ impl Cam {
     {
         let cam_mutex = Arc::new(Mutex::new(FrameBuf {
             buf: vec![BP; self.pixels],
-            ts: 0,
+            ts: 1,
         }));
+        cam_mutex
+        /*
         let mutex = cam_mutex.clone();
 
         thread::spawn(move|| {
@@ -126,6 +134,7 @@ impl Cam {
             }
         });
         cam_mutex
+        */
     }
 
     pub fn get_resolution(&self) -> [u32; 2] {
