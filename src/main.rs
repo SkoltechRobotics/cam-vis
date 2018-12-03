@@ -23,14 +23,12 @@ use vulkano::swapchain::SwapchainCreationError;
 use vulkano::pipeline::viewport::Viewport;
 use vulkano::device::Device;
 use vulkano::command_buffer::DynamicState;
+use vulkano::image::ImageUsage;
 
-use png::HasParameters;
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::{str, slice};
-use std::fs::File;
-use std::io::BufWriter;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::str;
+use std::time::{Instant, Duration};
 
 use structopt::StructOpt;
 
@@ -40,6 +38,7 @@ mod cam;
 mod demosaic;
 mod rggb;
 mod cli;
+mod events;
 
 mod shaders;
 
@@ -53,6 +52,25 @@ struct PushConstant {
     aspect: [f32; 2],
     offset: [f32; 2],
     zoom: f32,
+}
+
+struct EngineState {
+    recreate_swapchain: bool,
+    lmb_pressed: bool,
+    grid_on: bool,
+    is_grey: bool,
+    done: bool,
+    hidpi: f64,
+    dimensions: [u32; 2],
+    init_coor: [f32; 2],
+    mouse_coor: [f32; 2],
+    old_offset: [f32; 2],
+    resolution: [u32; 2],
+    push_consts: PushConstant,
+    pause: Arc<AtomicBool>,
+    cam_mutex: Arc<Mutex<cam::FrameBuf>>,
+    dyn_state: DynamicState,
+    frame_ts: u64,
 }
 
 fn rgb2rgba(pix: &[u8; 3]) -> [u8; 4] {
@@ -86,8 +104,6 @@ fn main() -> Result<(), Box<std::error::Error>> {
         //.with_fullscreen(Some(events_loop.get_primary_monitor()))
         .build_vk_surface(&events_loop, instance.clone())
         .expect("failed to build window");
-
-    let mut hidpi = surface.window().get_hidpi_factor();
 
     let queue = physical.queue_families().find(|&q|
         q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
@@ -139,14 +155,14 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
     let mut grid = Vec::new();
 
-    let w_f32 = (resolution.0 as f32)/2.;
-    for i in (args.grid_step..resolution.0).step_by(args.grid_step as usize) {
+    let w_f32 = (resolution[0] as f32)/2.;
+    for i in (args.grid_step..resolution[0]).step_by(args.grid_step as usize) {
         let c = (i as f32)/w_f32 - 1.;
         grid.extend_from_slice(&[[c, -1.], [c, 1.]]);
     }
 
-    let h_f32 = (resolution.1 as f32)/2.;
-    for i in (args.grid_step..resolution.1).step_by(args.grid_step as usize) {
+    let h_f32 = (resolution[1] as f32)/2.;
+    for i in (args.grid_step..resolution[1]).step_by(args.grid_step as usize) {
         let c = (i as f32)/h_f32 - 1.;
         grid.extend_from_slice(&[[-1., c], [1., c]]);
     }
@@ -184,10 +200,13 @@ fn main() -> Result<(), Box<std::error::Error>> {
         ).unwrap()
     );
 
-    let texture = StorageImage::new(
+    let texture = StorageImage::with_usage(
         device.clone(),
-        Dimensions::Dim2d { width: resolution.0, height: resolution.1 },
-        vulkano::format::R8G8B8A8Unorm,
+        Dimensions::Dim2d { width: resolution[0], height: resolution[1] },
+        vulkano::format::R8G8B8A8Srgb,
+        ImageUsage {
+            transfer_destination: true, sampled: true, ..ImageUsage::none()
+        },
         Some(queue.family()),
     ).unwrap();
 
@@ -239,37 +258,65 @@ fn main() -> Result<(), Box<std::error::Error>> {
                  .build().unwrap())
         ).collect::<Vec<Arc<Framebuffer<_,_>>>>();
 
-    let mut recreate_swapchain = false;
-
     let prev_frame = Box::new(vulkano::sync::now(device.clone()));
     let mut previous_frame = prev_frame as Box<GpuFuture>;
 
-    let mut push_consts = PushConstant{
-        aspect: [1.0, 1.0], zoom: 1.0, offset: [0., 0.],
+    let mut state = EngineState {
+        recreate_swapchain: false,
+        lmb_pressed: false,
+        grid_on: false,
+        is_grey: is_grey,
+        done: false,
+        hidpi: surface.window().get_hidpi_factor(),
+        dimensions: dimensions,
+        init_coor: [0f32; 2],
+        mouse_coor: [0f32; 2],
+        old_offset: [0., 0.],
+        resolution: resolution,
+        push_consts: PushConstant {
+            aspect: [1.0, 1.0], zoom: 1.0, offset: [0., 0.],
+        },
+        pause: pause,
+        cam_mutex: cam_mutex,
+        dyn_state: DynamicState {
+            line_width: None,
+            viewports: Some(vec![Viewport {
+                origin: [0.0, 0.0],
+                dimensions: [dimensions[0] as f32, dimensions[1] as f32],
+                depth_range: 0.0 .. 1.0,
+            }]),
+            scissors: None,
+        },
+        frame_ts: 0u64,
     };
-
-    let mut lmb_pressed = false;
-    let mut init_coor = [0f32; 2];
-    let mut mouse_coor = [0f32; 2];
-    let mut old_offset = push_consts.offset;
-    let mut grid_on = false;
-
-    let mut frame_ts = 0u64;
 
     let buf_pool = CpuBufferPool::upload(device.clone());
     let mut chunk = buf_pool.chunk(
-        (0..resolution.0*resolution.1).map(|_| [0u8, 0, 0, 255]))
+        (0..resolution[0]*resolution[1]).map(|_| [0u8, 0, 0, 255]))
         .unwrap();
 
+    let mut t = Instant::now();
+    let mut fc = 0;
     loop {
+        let dt = t.elapsed();
+        if dt > Duration::from_secs(1) {
+            let micros = dt.subsec_micros() as f32;
+            let secs = dt.as_secs() as f32 + micros/1_000_000.;
+            println!("fps: {:?}", (fc as f32)/secs);
+
+            t = Instant::now();
+            fc = 0;
+        }
+
         previous_frame.cleanup_finished();
 
-        if recreate_swapchain {
-            dimensions = surface.capabilities(physical)
+        if state.recreate_swapchain {
+            let res = state.resolution;
+            let dims = surface.capabilities(physical)
                 .expect("failed to get surface capabilities")
-                .current_extent.unwrap_or(dimensions);
+                .current_extent.unwrap_or(state.dimensions);
 
-            match swapchain.recreate_with_dimension(dimensions) {
+            match swapchain.recreate_with_dimension(dims) {
                 Ok((new_swapchain, new_images)) => {
                     swapchain = new_swapchain;
                     images = new_images;
@@ -280,10 +327,10 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 Err(err) => panic!("{:?}", err)
             };
 
-            let r_p1 = (dimensions[0] as f32)/(dimensions[1] as f32);
-            let r_p2 = (resolution.0 as f32)/(resolution.1 as f32);
+            let r_p1 = (dims[0] as f32)/(dims[1] as f32);
+            let r_p2 = (res[0] as f32)/(res[1] as f32);
 
-            push_consts.aspect = if r_p1 > r_p2 {
+            state.push_consts.aspect = if r_p1 > r_p2 {
                 [r_p2/r_p1, 1.]
             } else {
                 [1.0, r_p1/r_p2]
@@ -295,37 +342,34 @@ fn main() -> Result<(), Box<std::error::Error>> {
                          .build().unwrap())
                 ).collect::<Vec<_>>();
 
-            recreate_swapchain = false;
+            state.dimensions = dims;
+            match &mut state.dyn_state.viewports {
+                Some(v) if v.len() == 1 => {
+                    v[0].dimensions = [dims[0] as f32, dims[1] as f32];
+                },
+                _ => panic!("unexpected viewports value"),
+            };
+
+            state.recreate_swapchain = false;
         }
 
         let next_img = acquire_next_image(swapchain.clone(), None);
         let (image_num, future) = match next_img {
             Ok(r) => r,
             Err(vulkano::swapchain::AcquireError::OutOfDate) => {
-                recreate_swapchain = true;
+                state.recreate_swapchain = true;
                 continue;
             },
             Err(err) => panic!("{:?}", err)
         };
 
-        let dyn_state = DynamicState {
-            line_width: None,
-            viewports: Some(vec![Viewport {
-                origin: [0.0, 0.0],
-                dimensions: [dimensions[0] as f32, dimensions[1] as f32],
-                depth_range: 0.0 .. 1.0,
-            }]),
-            scissors: None,
-        };
-
         {
-            let guard = cam_mutex.lock().unwrap();
-            if guard.ts != frame_ts {
-                frame_ts = guard.ts;
-                match buf_pool.chunk(guard.buf.iter().map(rgb2rgba)) {
-                    Ok(c) => chunk = c,
-                    Err(e) => eprintln!("BufPool error: {:?}", e),
-                }
+            let guard = state.cam_mutex.lock().unwrap();
+            if guard.ts != state.frame_ts {
+                state.frame_ts = guard.ts;
+                chunk = buf_pool.chunk(guard.buf.iter()
+                    .map(rgb2rgba))
+                    .unwrap();
             }
         };
 
@@ -339,18 +383,18 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 vec![[0.0, 0.0, 0.0, 1.0].into()]).unwrap()
             .draw(
                 pipeline.clone(),
-                &dyn_state,
+                &state.dyn_state,
                 vertex_buffer.clone(),
-                set.clone(), push_consts,
+                set.clone(), state.push_consts,
             ).expect("Main pipeline draw fail");
 
-        if grid_on {
+        if state.grid_on {
             cbb = cbb
                 .draw(
                     grid_pipeline.clone(),
-                    &dyn_state,
+                    &state.dyn_state,
                     grid_vertex_buffer.clone(),
-                    (), push_consts,
+                    (), state.push_consts,
                 ).expect("grid pipeline draw fail");
         }
 
@@ -362,138 +406,9 @@ fn main() -> Result<(), Box<std::error::Error>> {
             .then_signal_fence_and_flush().unwrap();
         previous_frame = Box::new(future) as Box<vulkano::sync::GpuFuture>;
 
-        let mut done = false;
-        events_loop.poll_events(|event| {
-            if let winit::Event::WindowEvent{ event, .. } = event {
-                use winit::WindowEvent::*;
+        events_loop.poll_events(|event| events::handle(event, &mut state));
+        if state.done { return Ok(()); }
 
-                match event {
-                    CloseRequested => done = true,
-                    HiDpiFactorChanged(val) => hidpi = val,
-                    Resized(size) => {
-                        recreate_swapchain = true;
-                        dimensions = [
-                            (hidpi*size.width) as u32,
-                            (hidpi*size.height) as u32,
-                        ];
-                    },
-                    KeyboardInput {
-                        input: winit::KeyboardInput {
-                            state: winit::ElementState::Pressed,
-                            virtual_keycode: Some(keycode),
-                            ..
-                        }, ..
-                    } => {
-                        use winit::VirtualKeyCode::*;
-                        match keycode {
-                            Escape => done = true,
-                            Space => {
-                                pause.fetch_nand(true, Ordering::Relaxed);
-                            },
-                            G => grid_on = !grid_on,
-                            R => {
-                                push_consts.zoom = 1.0;
-                                push_consts.offset = [0., 0.];
-                            },
-                            S => {
-                                let guard = cam_mutex.lock().unwrap();
-
-                                let path = format!("{}.png", guard.ts);
-                                let file = File::create(&path).unwrap();
-
-                                let mut bw = BufWriter::new(file);
-                                let mut encoder = png::Encoder::new(
-                                    &mut bw, resolution.0, resolution.1,
-                                );
-                                encoder.set(png::BitDepth::Eight);
-                                if is_grey {
-                                    encoder.set(png::ColorType::Grayscale);
-                                    let mut w = encoder.write_header().unwrap();
-                                    let data: Vec<u8> = guard.buf
-                                        .iter()
-                                        .map(|p| p[0])
-                                        .collect();
-                                    w.write_image_data(&data).unwrap();
-                                } else {
-                                    encoder.set(png::ColorType::RGB);
-                                    let mut w = encoder.write_header().unwrap();
-                                    let buf = guard.buf.as_slice();
-                                    let data = unsafe {
-                                        slice::from_raw_parts(
-                                            buf.as_ptr() as *const u8,
-                                            3*buf.len(),
-                                        )
-                                    };
-                                    w.write_image_data(&data).unwrap();
-                                }
-                                println!("Saved: {}", path);
-                            }
-                            _ => (),
-                        }
-                    },
-                    winit::WindowEvent::MouseWheel {
-                        delta,
-                        phase: winit::TouchPhase::Moved,
-                        ..
-                    } => {
-                        use winit::MouseScrollDelta::*;
-
-                        let new_zoom = match delta {
-                            LineDelta(_, d) => if d > 0. {
-                                push_consts.zoom * 1.5
-                            } else {
-                                push_consts.zoom / 1.5
-                            },
-                            PixelDelta(
-                                winit::dpi::LogicalPosition { y, .. }
-                            ) => {
-                                push_consts.zoom * 1.03f32.powf(y as f32)
-                            },
-                        };
-
-                        let xg = 2.*mouse_coor[0]/(dimensions[0] as f32) - 1.;
-                        let yg = 2.*mouse_coor[1]/(dimensions[1] as f32) - 1.;
-
-                        let k = (1./new_zoom - 1./push_consts.zoom)/2.;
-
-                        push_consts.offset[0] += k*xg/push_consts.aspect[0];
-                        push_consts.offset[1] += k*yg/push_consts.aspect[1];
-                        push_consts.zoom = new_zoom;
-                    },
-                    CursorMoved {
-                        position: winit::dpi::LogicalPosition { x, y },
-                        ..
-                    } => {
-                        let x = (hidpi*x) as f32;
-                        let y = (hidpi*y) as f32;
-                        mouse_coor = [x, y];
-                        if lmb_pressed {
-                            let z = push_consts.zoom;
-                            let dim = dimensions;
-                            let ic = init_coor;
-                            let k_x = push_consts.aspect[0]*(dim[0] as f32)*z;
-                            let k_y = push_consts.aspect[1]*(dim[1] as f32)*z;
-                            push_consts.offset = [
-                                old_offset[0] + (x - ic[0])/k_x,
-                                old_offset[1] + (y - ic[1])/k_y,
-                            ];
-                        }
-                    },
-                    MouseInput {
-                        state,
-                        button: winit::MouseButton::Left,
-                        ..
-                    } => {
-                        lmb_pressed = state == winit::ElementState::Pressed;
-                        if lmb_pressed {
-                            old_offset = push_consts.offset;
-                            init_coor = mouse_coor;
-                        }
-                    },
-                    _ => (), //println!("{:?}", ev),
-                }
-            }
-        });
-        if done { return Ok(()); }
+        fc += 1;
     }
 }

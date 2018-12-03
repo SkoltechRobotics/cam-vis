@@ -9,7 +9,7 @@ pub(crate) struct Cli {
     pub camera: String,
     #[structopt(long = "mode", short = "m",
         parse(try_from_str = "parse_mode"),
-        default_value="mailbox")]
+        default_value="fifo")]
     /// Vulkan present mode: immediate, mailbox, fifo or relaxed
     pub mode: PresentMode,
     #[structopt(long = "grid-step", short = "g", default_value="64")]

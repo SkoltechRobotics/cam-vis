@@ -13,7 +13,7 @@ fn demosaic_rggb(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {
     };
 
     let res = cam.get_resolution();
-    rggb::demosaic(frame, buf2, res.0 as usize, res.1 as usize);
+    rggb::demosaic(frame, buf2, res[0] as usize, res[1] as usize);
 }
 
 fn demosaic_yuyv(cam: &Cam, buf: &mut [[u8; 3]], frame: &[u8]) {

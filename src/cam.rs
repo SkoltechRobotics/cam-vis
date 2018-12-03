@@ -128,8 +128,8 @@ impl Cam {
         cam_mutex
     }
 
-    pub fn get_resolution(&self) -> (u32, u32) {
-        self.resolution
+    pub fn get_resolution(&self) -> [u32; 2] {
+        [self.resolution.0, self.resolution.1]
     }
 
     /*pub fn get_interval(&self) -> (u32, u32) {
