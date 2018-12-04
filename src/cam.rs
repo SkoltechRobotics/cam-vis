@@ -22,6 +22,7 @@ pub struct Cam {
 pub struct FrameBuf {
     pub buf: Vec<[u8; 3]>,
     pub ts: u64,
+    pub hist: [u32; 256],
 }
 
 impl Cam {
@@ -95,6 +96,7 @@ impl Cam {
         let cam_mutex = Arc::new(Mutex::new(FrameBuf {
             buf: vec![BP; self.pixels],
             ts: 0,
+            hist: [0; 256],
         }));
         let mutex = cam_mutex.clone();
 
@@ -122,6 +124,7 @@ impl Cam {
                 };
 
                 guard.ts = t;
+                guard.hist = calc_hist(&guard.buf);
                 prev = t;
             }
         });
@@ -148,10 +151,24 @@ impl Cam {
     pub fn get_frame_size(&self) -> usize {
         self.frame_size
     }
+
+    pub fn is_grey(&self) -> bool {
+        &self.get_format() == b"GREY"
+    }
 }
 
 fn is_drop(t: u64, prev: u64, interval: (u32, u32)) -> bool {
     let dt = t - prev;
     //println!("{:?} {}", dt, (interval.0 as u64)*1_000_000/(interval.1 as u64));
     dt > u64::from(interval.0)*1_100_000/u64::from(interval.1)
+}
+
+fn calc_hist(buf: &[[u8; 3]]) -> [u32; 256] {
+    let mut hist = [0u32; 256];
+    for b in buf {
+        let i = ((b[0] as usize) + 2*(b[1] as usize) + (b[2] as usize))/4;
+        // safe because we guarantee that i <= 255
+        unsafe { *hist.get_unchecked_mut(i) += 1; }
+    }
+    hist
 }

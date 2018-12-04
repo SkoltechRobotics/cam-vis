@@ -12,6 +12,13 @@ pub mod fs2 {
     }
 }
 
+pub mod fs3 {
+    vulkano_shaders::shader!{
+        ty: "fragment",
+        path: "src/shaders/fs3.glsl"
+    }
+}
+
 pub mod vs {
     vulkano_shaders::shader!{
         ty: "vertex",
@@ -23,5 +30,12 @@ pub mod vs2 {
     vulkano_shaders::shader!{
         ty: "vertex",
         path: "src/shaders/vs2.glsl"
+    }
+}
+
+pub mod vs3 {
+    vulkano_shaders::shader!{
+        ty: "vertex",
+        path: "src/shaders/vs3.glsl"
     }
 }

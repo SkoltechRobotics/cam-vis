@@ -36,6 +36,7 @@ pub(crate) fn handle(event: Event, state: &mut EngineState) {
                         state.pause.fetch_nand(true, Ordering::Relaxed);
                     },
                     G => state.grid_on = !state.grid_on,
+                    H => state.hist_on = !state.hist_on,
                     R => {
                         state.push_consts.zoom = 1.0;
                         state.push_consts.offset = [0., 0.];

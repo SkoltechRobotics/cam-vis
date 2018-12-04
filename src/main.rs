@@ -58,6 +58,7 @@ struct EngineState {
     recreate_swapchain: bool,
     lmb_pressed: bool,
     grid_on: bool,
+    hist_on: bool,
     is_grey: bool,
     done: bool,
     hidpi: f64,
@@ -120,7 +121,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
 
     let pause = Arc::new(AtomicBool::new(false));
-    let is_grey = &cam.get_format() == b"GREY";
+    let is_grey = cam.is_grey();
     let cam_mutex = cam.run_worker(pause.clone());
 
 
@@ -181,6 +182,11 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let vs2 = shaders::vs2::Shader::load(device.clone())
         .expect("vs2: failed to create shader module");
     let fs2 = shaders::fs2::Shader::load(device.clone())
+        .expect("fs2: failed to create shader module");
+
+    let vs3 = shaders::vs3::Shader::load(device.clone())
+        .expect("vs2: failed to create shader module");
+    let fs3 = shaders::fs3::Shader::load(device.clone())
         .expect("fs2: failed to create shader module");
 
     let renderpass = Arc::new(
@@ -246,6 +252,18 @@ fn main() -> Result<(), Box<std::error::Error>> {
         .expect("Failed to build grid pipeline")
     );
 
+    let hist_pipeline = Arc::new(vulkano::pipeline::GraphicsPipeline::start()
+        .vertex_input_single_buffer::<Vertex>()
+        .vertex_shader(vs3.main_entry_point(), ())
+        .line_strip()
+        .viewports_dynamic_scissors_irrelevant(1)
+        .fragment_shader(fs3.main_entry_point(), ())
+        .blend_alpha_blending()
+        .render_pass(Subpass::from(renderpass.clone(), 0).unwrap())
+        .build(device.clone())
+        .expect("Failed to build main pipeline")
+    );
+
     let set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
         .add_sampled_image(texture.clone(), sampler.clone()).unwrap()
         .build().unwrap()
@@ -265,6 +283,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
         recreate_swapchain: false,
         lmb_pressed: false,
         grid_on: false,
+        hist_on: false,
         is_grey: is_grey,
         done: false,
         hidpi: surface.window().get_hidpi_factor(),
@@ -294,6 +313,10 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let mut chunk = buf_pool.chunk(
         (0..resolution[0]*resolution[1]).map(|_| [0u8, 0, 0, 255]))
         .unwrap();
+
+    let mut hist_vertices: Vec<Vertex> = (0..=255)
+        .map(|x| Vertex { position: [(x as f32)/255., 0.] })
+        .collect();
 
     let mut t = Instant::now();
     let mut fc = 0;
@@ -371,6 +394,11 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 chunk = buf_pool
                     .chunk(guard.buf.iter().map(rgb2rgba))
                     .unwrap();
+
+                let hist_max = guard.hist.iter().cloned().max().unwrap() as f32;
+                for (&val, vert) in guard.hist.iter().zip(hist_vertices.iter_mut()) {
+                    vert.position[1] = 1.0 - (val as f32)/hist_max;
+                }
             }
         };
 
@@ -397,6 +425,33 @@ fn main() -> Result<(), Box<std::error::Error>> {
                     grid_vertex_buffer.clone(),
                     (), state.push_consts,
                 ).expect("grid pipeline draw fail");
+        }
+
+        if state.hist_on {
+            let hist_vertices = CpuAccessibleBuffer::from_iter(
+                device.clone(),
+                vulkano::buffer::BufferUsage::all(),
+                hist_vertices.iter().cloned()
+            ).expect("failed to create buffer");
+
+            let w = state.dimensions[0] as f32;
+            let h = state.dimensions[1] as f32;
+            let dyn_state = DynamicState {
+                line_width: None,
+                viewports: Some(vec![Viewport {
+                    origin: [0., 0.],
+                    dimensions: [w, h],
+                    depth_range: 0.0 .. 1.0,
+                }]),
+                scissors: None,
+            };
+
+            cbb = cbb.draw(
+                hist_pipeline.clone(),
+                &dyn_state,
+                hist_vertices.clone(),
+                set.clone(), ()
+            ).unwrap()
         }
 
         let cb = cbb.end_render_pass().unwrap().build().unwrap();
