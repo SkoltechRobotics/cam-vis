@@ -59,10 +59,11 @@ struct EngineState {
     lmb_pressed: bool,
     grid_on: bool,
     hist_on: bool,
+    fps_on: bool,
     is_grey: bool,
     done: bool,
     hidpi: f64,
-    dimensions: [u32; 2],
+    dimensions: [f64; 2],
     init_coor: [f32; 2],
     mouse_coor: [f32; 2],
     old_offset: [f32; 2],
@@ -279,15 +280,17 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let prev_frame = Box::new(vulkano::sync::now(device.clone()));
     let mut previous_frame = prev_frame as Box<GpuFuture>;
 
+    let hidpi = surface.window().get_hidpi_factor();
     let mut state = EngineState {
         recreate_swapchain: false,
         lmb_pressed: false,
         grid_on: false,
         hist_on: false,
+        fps_on: false,
         is_grey: is_grey,
         done: false,
-        hidpi: surface.window().get_hidpi_factor(),
-        dimensions: dimensions,
+        hidpi: hidpi,
+        dimensions: [dimensions[0] as f64, dimensions[1] as f64],
         init_coor: [0f32; 2],
         mouse_coor: [0f32; 2],
         old_offset: [0., 0.],
@@ -323,9 +326,11 @@ fn main() -> Result<(), Box<std::error::Error>> {
     loop {
         let dt = t.elapsed();
         if dt > Duration::from_secs(1) {
-            let micros = dt.subsec_micros() as f32;
-            let secs = dt.as_secs() as f32 + micros/1_000_000.;
-            println!("fps: {:?}", (fc as f32)/secs);
+            if state.fps_on {
+                let micros = dt.subsec_micros() as f32;
+                let secs = dt.as_secs() as f32 + micros/1_000_000.;
+                println!("fps: {:?}", (fc as f32)/secs);
+            }
 
             t = Instant::now();
             fc = 0;
@@ -336,9 +341,13 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
         if state.recreate_swapchain {
             let res = state.resolution;
+            let default_dims = [
+                (state.dimensions[0]*state.hidpi) as u32,
+                (state.dimensions[1]*state.hidpi) as u32,
+            ];
             let dims = surface.capabilities(physical)
                 .expect("failed to get surface capabilities")
-                .current_extent.unwrap_or(state.dimensions);
+                .current_extent.unwrap_or(default_dims);
 
             match swapchain.recreate_with_dimension(dims) {
                 Ok((new_swapchain, new_images)) => {
@@ -366,7 +375,6 @@ fn main() -> Result<(), Box<std::error::Error>> {
                          .build().unwrap())
                 ).collect::<Vec<_>>();
 
-            state.dimensions = dims;
             match &mut state.dyn_state.viewports {
                 Some(v) if v.len() == 1 => {
                     v[0].dimensions = [dims[0] as f32, dims[1] as f32];
@@ -434,8 +442,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
                 hist_vertices.iter().cloned()
             ).expect("failed to create buffer");
 
-            let w = state.dimensions[0] as f32;
-            let h = state.dimensions[1] as f32;
+            let [w, h] = events::get_dims(&state);
             let dyn_state = DynamicState {
                 line_width: None,
                 viewports: Some(vec![Viewport {

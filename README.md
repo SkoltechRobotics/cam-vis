@@ -32,7 +32,8 @@ are available:
 
 - `s`: save current frame as a PNG image.
 - `g`: turn grid on or off.
-- `h`: turn histogram on or off
+- `h`: turn histogram on or off.
+- `f`: turn (console) FPS counter on or off.
 - `r`: fit image into the current window size (reset drag and zoom).
 - `Space`: pause on current frame.
 - `Esc`: exit the application.

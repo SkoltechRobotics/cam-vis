@@ -10,6 +10,23 @@ use std::slice;
 use std::fs::File;
 use std::io::BufWriter;
 
+pub(crate) fn get_dims(state: &EngineState) -> [f32; 2] {
+    [
+        (state.dimensions[0]*state.hidpi) as f32,
+        (state.dimensions[1]*state.hidpi) as f32,
+    ]
+}
+
+macro_rules! indicate_on_off {
+    ($func:expr, $is_on:expr) => {
+        if $is_on {
+            println!(concat!($func, ": ON"));
+        } else {
+            println!(concat!($func, ": OFF"));
+        }
+    }
+}
+
 pub(crate) fn handle(event: Event, state: &mut EngineState) {
     if let winit::Event::WindowEvent{ event, .. } = event {
         match event {
@@ -17,10 +34,7 @@ pub(crate) fn handle(event: Event, state: &mut EngineState) {
             HiDpiFactorChanged(val) => state.hidpi = val,
             Resized(size) => {
                 state.recreate_swapchain = true;
-                state.dimensions = [
-                    (state.hidpi*size.width) as u32,
-                    (state.hidpi*size.height) as u32,
-                ];
+                state.dimensions = [size.width, size.height];
             },
             KeyboardInput {
                 input: winit::KeyboardInput {
@@ -35,8 +49,18 @@ pub(crate) fn handle(event: Event, state: &mut EngineState) {
                     Space => {
                         state.pause.fetch_nand(true, Ordering::Relaxed);
                     },
-                    G => state.grid_on = !state.grid_on,
-                    H => state.hist_on = !state.hist_on,
+                    G => {
+                        state.grid_on = !state.grid_on;
+                        indicate_on_off!("grid", state.grid_on);
+                    },
+                    H => {
+                        state.hist_on = !state.hist_on;
+                        indicate_on_off!("histogram", state.hist_on);
+                    },
+                    F => {
+                        state.fps_on = !state.fps_on;
+                        indicate_on_off!("FPS counter", state.fps_on);
+                    },
                     R => {
                         state.push_consts.zoom = 1.0;
                         state.push_consts.offset = [0., 0.];
@@ -97,7 +121,7 @@ pub(crate) fn handle(event: Event, state: &mut EngineState) {
                     },
                 };
 
-                let dims = state.dimensions;
+                let dims = get_dims(state);
                 let push_consts = &mut state.push_consts;
                 let xg = 2.*state.mouse_coor[0]/(dims[0] as f32) - 1.;
                 let yg = 2.*state.mouse_coor[1]/(dims[1] as f32) - 1.;
@@ -117,7 +141,7 @@ pub(crate) fn handle(event: Event, state: &mut EngineState) {
                 state.mouse_coor = [x, y];
                 if state.lmb_pressed {
                     let z = state.push_consts.zoom;
-                    let dim = state.dimensions;
+                    let dim = get_dims(state);
                     let ic = state.init_coor;
                     let k_x = state.push_consts.aspect[0]*(dim[0] as f32)*z;
                     let k_y = state.push_consts.aspect[1]*(dim[1] as f32)*z;
